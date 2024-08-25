@@ -1,0 +1,88 @@
+networks:
+  network:
+    name: ${PROJECT_NAME}-network
+
+services:
+  cassandra:
+    container_name: ${PROJECT_NAME}-cassandra
+    image: cassandra:4.1.5
+    hostname: cassandra
+    volumes:
+      - cassandra_data:/var/lib/cassandra
+      - ./cassandra/cassandra.yaml:/etc/cassandra/cassandra.yaml
+    networks:
+      - network
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "[ $$(nodetool statusgossip) = running ]"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  cassandra-schema:
+    container_name: ${PROJECT_NAME}-cassandra-schema
+    image: jaegertracing/jaeger-cassandra-schema:1.58
+    hostname: cassandra-schema
+    environment:
+      - CQLSH_HOST=${CASSANDRA_HOST}
+      - CQLSH_PORT=${CASSANDRA_CQL_PORT}
+      - CASSANDRA_USERNAME=${CASSANDRA_USER}
+      - CASSANDRA_PASSWORD=${CASSANDRA_PASSWORD}
+    depends_on:
+      cassandra:
+        condition: service_healthy
+    networks:
+      - network
+    restart: on-failure
+
+  jaeger-collector:
+    container_name: ${PROJECT_NAME}-jaeger-collector
+    image: jaegertracing/jaeger-collector:1.60
+    hostname: jaeger-collector
+    command:
+      # More options with
+      #   docker run -e SPAN_STORAGE_TYPE=cassandra jaegertracing/jaeger-collector:1.60 --help
+      - "--cassandra.basic.allowed-authenticators=org.apache.cassandra.auth.PasswordAuthenticator"
+      - "--cassandra.keyspace=${CASSANDRA_KEYSPACE}"
+      - "--cassandra.servers=${CASSANDRA_HOST}"
+      - "--cassandra.username=${CASSANDRA_USER}"
+      - "--cassandra.password=${CASSANDRA_PASSWORD}"
+      - "--cassandra.port=${CASSANDRA_CQL_PORT}"
+      - "--sampling.initial-sampling-probability=.5"
+      - "--sampling.target-samples-per-second=.01"
+      - "--log-level=info"
+    environment: 
+      - SAMPLING_CONFIG_TYPE=adaptive
+    ports:
+      - ${JAEGER_COLLECTOR_GRPC_PORT}:4317
+    depends_on:
+      - cassandra-schema
+    networks:
+      - network
+    restart: always
+
+  jaeger-query:
+    container_name: ${PROJECT_NAME}-jaeger-query
+    image: jaegertracing/jaeger-query:1.60
+    hostname: jaeger-query
+    command:
+      # More options with
+      #   docker run jaegertracing/jaeger-query:1.60 --help
+      - "--cassandra.basic.allowed-authenticators=org.apache.cassandra.auth.PasswordAuthenticator"
+      - "--cassandra.keyspace=${CASSANDRA_KEYSPACE}"
+      - "--cassandra.servers=${CASSANDRA_HOST}"
+      - "--cassandra.username=${CASSANDRA_USER}"
+      - "--cassandra.password=${CASSANDRA_PASSWORD}"
+      - "--cassandra.port=${CASSANDRA_CQL_PORT}"
+      - "--log-level=info"
+    ports:
+      - ${JAEGER_QUERY_WEB_PORT}:16686
+    depends_on:
+      - cassandra-schema
+    networks:
+      - network
+    restart: always
+
+volumes:
+  cassandra_data:
+    name: ${PROJECT_NAME}_cassandra_data
